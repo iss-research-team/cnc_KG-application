@@ -4,10 +4,11 @@
 # @Author  : liu yuhan
 # @FileName: multilayer-draw.py
 # @Software: PyCharm
+
 import json
-import pandas as pd
+import networkx as nx
 from collections import defaultdict, Counter
-from tqdm import tqdm
+import plotly.graph_objs as go
 
 
 def dict_reverse(key_value_list):
@@ -19,7 +20,7 @@ def dict_reverse(key_value_list):
 
 
 class MultilayerAnalysis:
-    def __init__(self, tech_point, related=False):
+    def __init__(self, tech_point, output_path, node_size, line_width, related=False):
         """
         :param tech_point: 需要进行分析的技术点
         :param related: 是否分析相关技术的选项，
@@ -31,6 +32,7 @@ class MultilayerAnalysis:
         else:
             # 技术点之前目前没有连接
             self.tech_point = [tech_point]
+        self.output_path = output_path
         # 转换为label
         self.trans2index()
         # 各类节点
@@ -57,6 +59,12 @@ class MultilayerAnalysis:
         self.doc_p_node = dict()
         self.author_node = dict()
         self.inst_node = dict()
+        # 画图
+        self.node_layout = dict()
+        self.xn, self.yn, self.zn = [], [], []
+        self.xe, self.ye, self.ze = [], [], []
+        self.node_size = node_size
+        self.line_width = line_width
 
     def trans2index(self):
         with open('../data/node/keyword2index.json', 'r', encoding='UTF-8') as file:
@@ -101,12 +109,6 @@ class MultilayerAnalysis:
         print('    processing--- link_inter---')
         self.link_trans_inter()
 
-    def network_draw(self):
-        """
-        最后一步画图，
-        :return:
-        """
-
     def node_trans(self):
         """
         节点的index进行修改
@@ -124,6 +126,7 @@ class MultilayerAnalysis:
     def link_trans_intra(self):
         """
         层内连接的index进行修改
+        目前无法考虑weight
         :return:
         """
         for link_list_temper, to_node_temper in \
@@ -135,6 +138,7 @@ class MultilayerAnalysis:
     def link_trans_inter(self):
         """
         层间连接的index进行修改
+        目前无法考虑weight
         :return:
         """
         for link_list_temper, to_source_temper, to_target_temper in \
@@ -185,7 +189,6 @@ class MultilayerAnalysis:
     def author_net_single(self, label):
         """
         服务于作者的合作网络，机构的合作网络
-        :param role:
         :param label:
         :return:
         """
@@ -223,7 +226,6 @@ class MultilayerAnalysis:
     def inst_co_net_single(self, label):
         """
         服务于作者的合作网络，机构的合作网络
-        :param role:
         :param label:
         :return:
         """
@@ -323,8 +325,190 @@ class MultilayerAnalysis:
         self.inst_link_supply = self.inst_supply_get()
         self.author_inst = self.author_inst_get()
 
+    def network_draw(self):
+        """
+        最后一步画图，
+        :return:
+        """
+        print('draw---')
+        print('    processing--- layout---')
+        self.get_layout()
+        print('    processing--- get_draw_data---')
+        self.get_draw_data()
+        print('    processing--- draw---')
+        self.draw()
+
+    def get_layout(self):
+        """
+        这个地方有两种方案
+            1.四层网络合起来做一个layout
+            2.每层单独做layout
+            目前采用方案1
+        :return:
+        """
+        g_layout = nx.Graph()
+        g_layout.add_nodes_from(self.node_list)
+        g_layout.add_edges_from(
+            self.doc_l_link + self.doc_p_link + self.author_link + self.inst_link_co + self.inst_link_supply +
+            self.tech_doc_l + self.tech_doc_p + self.doc_l_author + self.doc_p_author + self.author_inst)
+        pos = nx.spectral_layout(g_layout)
+
+        for node in list(g_layout.nodes):
+            self.node_layout[node] = {'pos': list(pos[node])}
+
+    def get_draw_data(self):
+        """
+        节点连接转换成三维
+        :return:
+        """
+
+        # 坐标跨度计算，计算节点坐标在 x,y 两个维度上的跨度
+        def get_h(xyz_dict):
+            x_max = max([xyz_dict[i]['pos'][0] for i in xyz_dict])
+            y_max = max([xyz_dict[i]['pos'][1] for i in xyz_dict])
+            x_min = min([xyz_dict[i]['pos'][0] for i in xyz_dict])
+            y_min = min([xyz_dict[i]['pos'][1] for i in xyz_dict])
+            x_span = x_max - x_min
+            y_span = y_max - y_min
+            return (x_span * y_span) ** 0.5
+
+        # 二维变三维
+        def get_xyz_3d(node_list, h):
+            node_xyz_dict = dict()
+            for node in node_list:
+                xyz = self.node_layout[node]['pos'] + [h]
+                node_xyz_dict[node] = xyz
+            return node_xyz_dict
+
+        high = get_h(self.node_layout)
+        node_tech_xyz = get_xyz_3d(list(self.tech_node.values()), h=0)
+        node_doc_l_xyz = get_xyz_3d(list(self.doc_l_node.values()), h=high)
+        node_doc_p_xyz = get_xyz_3d(list(self.doc_p_node.values()), h=high)
+        node_author_xyz = get_xyz_3d(list(self.author_node.values()), h=high * 2)
+        node_inst_xyz = get_xyz_3d(list(self.inst_node.values()), h=high * 3)
+
+        # 节点
+        def get_node_xyz(nodes_xyz):
+            xn_, yn_, zn_ = [], [], []
+            for node in nodes_xyz:
+                xn_.append(nodes_xyz[node][0])
+                yn_.append(nodes_xyz[node][1])
+                zn_.append(nodes_xyz[node][2])
+            return xn_, yn_, zn_
+
+        for node_xyz in [node_tech_xyz, node_doc_l_xyz, node_doc_p_xyz, node_author_xyz, node_inst_xyz]:
+            xn_temper, yn_temper, zn_temper = get_node_xyz(node_xyz)
+            self.xn += xn_temper
+            self.yn += yn_temper
+            self.zn += zn_temper
+
+        # 连接
+        # 层内连接
+        def get_link_xyz_intra(link_list, nodes_xyz):
+            xe_, ye_, ze_ = [], [], []
+            for link in link_list:
+                xe_ += [nodes_xyz[link[0]][0], nodes_xyz[link[1]][0], None]
+                ye_ += [nodes_xyz[link[0]][1], nodes_xyz[link[1]][1], None]
+                ze_ += [nodes_xyz[link[0]][2], nodes_xyz[link[1]][2], None]
+            return xe_, ye_, ze_
+
+        for link, node_xyz in \
+                zip([self.doc_l_link, self.doc_p_link, self.author_link, self.inst_link_co, self.inst_link_supply],
+                    [node_doc_l_xyz, node_doc_p_xyz, node_author_xyz, node_inst_xyz, node_inst_xyz]):
+            xe_temper, ye_temper, ze_temper = get_link_xyz_intra(link, node_xyz)
+            self.xe += xe_temper
+            self.ye += ye_temper
+            self.ze += ze_temper
+
+        # 层间连接
+        def get_link_xyz_inter(link_list, nodes_xyz_source, nodes_xyz_target):
+            xe_, ye_, ze_ = [], [], []
+            for link in link_list:
+                xe_ += [nodes_xyz_source[link[0]][0], nodes_xyz_target[link[1]][0], None]
+                ye_ += [nodes_xyz_source[link[0]][1], nodes_xyz_target[link[1]][1], None]
+                ze_ += [nodes_xyz_source[link[0]][2], nodes_xyz_target[link[1]][2], None]
+            return xe_, ye_, ze_
+
+        for link, node_xyz_source, node_xyz_target in \
+                zip([self.tech_doc_l, self.tech_doc_p, self.doc_l_author, self.doc_p_author, self.author_inst],
+                    [node_tech_xyz, node_tech_xyz, node_doc_l_xyz, node_doc_p_xyz, node_author_xyz],
+                    [node_doc_l_xyz, node_doc_p_xyz, node_author_xyz, node_author_xyz, node_inst_xyz]):
+            xe_temper, ye_temper, ze_temper = get_link_xyz_inter(link, node_xyz_source, node_xyz_target)
+            self.xe += xe_temper
+            self.ye += ye_temper
+            self.ze += ze_temper
+
+    def draw(self):
+        """
+        画图
+        :return:
+        """
+        trace_node = go.Scatter3d(x=self.xn, y=self.yn, z=self.zn,
+                                  mode='markers',
+                                  name='actors',
+                                  marker=dict(symbol='circle',
+                                              size=node_size,  # size of nodes
+                                              # color=color_list_1 + color_list_2 + color_list_3,  # color of nodes
+                                              colorscale='Viridis'
+                                              ),
+                                  # text=labels,
+                                  hoverinfo='text'
+                                  )
+
+        trace_line = go.Scatter3d(x=self.xe, y=self.ye, z=self.ze,
+                                  mode='lines',
+                                  line=dict(width=line_width,
+                                            # color=['rgba(202,255,135,0.8)', 'rgba(202,255,135,0.8)', 0] *
+                                            #       int(len(Xe_1) / 3) +
+                                            #       ['rgba(25,206,250,0.8)', 'rgba(25,206,250,0.8)', 0] *
+                                            #       int(len(Xe_2) / 3) +
+                                            #       ['rgba(245,133,15,0.8)', 'rgba(245,133,15,0.8)', 0] *
+                                            #       int(len(Xe_3) / 3) +
+                                            #       ['rgba(100,100,100,0.7)', 'rgba(100,100,100,0.7)', 0] *
+                                            #       int(len(Xe_12 + Xe_23) / 3)
+                                            ),  # 线的颜色与尺寸
+                                  hoverinfo='none'
+                                  )
+        axis = dict(showbackground=False,
+                    showline=False,
+                    zeroline=False,
+                    showgrid=False,
+                    showticklabels=False,
+                    title=''
+                    )
+
+        layout = go.Layout(title="multilayer_analysis",
+                           width=1500,
+                           height=1500,
+                           showlegend=True,
+                           scene=dict(xaxis=dict(axis),
+                                      yaxis=dict(axis),
+                                      zaxis=dict(axis),
+                                      ),
+                           margin=dict(t=100),
+                           hovermode='closest',
+                           annotations=[dict(showarrow=False,
+                                             xref='paper',
+                                             yref='paper',
+                                             x=0,
+                                             y=0.1,
+                                             xanchor='left',
+                                             yanchor='bottom',
+                                             font=dict(size=14)
+                                             )
+                                        ]
+                           )
+
+        data_plot = [trace_line, trace_node]
+        fig = go.Figure(data=data_plot, layout=layout)
+        # 生成 html 格式文件
+        fig.write_html(self.output_path)
+
 
 if __name__ == '__main__':
-    tech_point = 'high speed'
-    multi_analysis = MultilayerAnalysis(tech_point)
+    tech_point = 'numerical control system'
+    output_path = '../data/output/multilayer_analysis.html'
+    node_size, line_width = 1, 0.5
+    multi_analysis = MultilayerAnalysis(tech_point, output_path, node_size, line_width, related=False)
     multi_analysis.network_get()
+    multi_analysis.network_draw()
