@@ -5,6 +5,7 @@
 # @FileName: multilayer-draw.py
 # @Software: PyCharm
 
+
 import json
 import networkx as nx
 from collections import defaultdict, Counter
@@ -19,22 +20,39 @@ def dict_reverse(key_value_list):
     return value_key_list
 
 
+def get_node_degree(node_list, link_list):
+    """
+    获取节点的度，并对节点的度进行排序，返回一个元祖list
+    :param node_list:
+    :param link_list:
+    :return:
+    """
+    g_doc = nx.Graph()
+    g_doc.add_nodes_from(node_list)
+    g_doc.add_edges_from(link_list)
+    return sorted(nx.degree(g_doc), key=lambda x: x[1], reverse=True)
+
+
 class MultilayerAnalysis:
-    def __init__(self, tech_point, output_path, node_size, line_width, related=False):
+    def __init__(self, tech_point, output_path, node_size, line_width, related=False, rank=False):
         """
         :param tech_point: 需要进行分析的技术点
         :param related: 是否分析相关技术的选项，
-            是：分析当前技术的所有子技术
+            是：分析当前技术的所有相关子技术
             否：仅分析当前技术
         """
-        if not related:
-            self.tech_point = [tech_point]
-        else:
-            # 技术点之前目前没有连接
-            self.tech_point = [tech_point]
-        self.output_path = output_path
+        self.rank = rank
+        self.tech_point = [tech_point]
         # 转换为label
         self.trans2index()
+        self.tech_point_list = []
+        self.tech_link = []
+        self.tech_net()
+        # 是否处理相关节点
+        if related:
+            self.tech_point = self.tech_point_list
+        # 输出
+        self.output_path = output_path
         # 各类节点
         self.doc_l_list = []
         self.doc_p_list = []
@@ -45,7 +63,6 @@ class MultilayerAnalysis:
         self.doc_p_link = []
         self.author_link = []
         self.inst_link_co = []
-        self.inst_link_supply = []
         # 层间连接
         self.tech_doc_l = []
         self.tech_doc_p = []
@@ -61,6 +78,8 @@ class MultilayerAnalysis:
         self.inst_node = dict()
         # 画图
         self.node_layout = dict()
+        self.x_span = []
+        self.y_span = []
         self.xn, self.yn, self.zn = [], [], []
         self.xe, self.ye, self.ze = [], [], []
         self.node_size = node_size
@@ -75,7 +94,27 @@ class MultilayerAnalysis:
                 tech_point_trans.append(keyword2index[node.lower()])
             except KeyError:
                 continue
+        if not tech_point_trans:
+            raise ValueError('tech_point is not exist.')
         self.tech_point = tech_point_trans
+
+    def tech_net(self):
+        """
+        科技网络
+        :return:
+        """
+        with open('../data/link/tech_tree.json', 'r', encoding='UTF-8') as file:
+            tech_tree = json.load(file)
+        tech_tree_reverse = dict_reverse(tech_tree)
+
+        for tech in self.tech_point:
+            farther_tech_point = tech_tree_reverse[tech][0]
+            tech_related_list = tech_tree[str(farther_tech_point)]
+            self.tech_point_list += tech_related_list
+            for tech_related in tech_related_list:
+                if tech == tech_related:
+                    continue
+                self.tech_link.append([tech, tech_related])
 
     def network_get(self):
         """
@@ -116,12 +155,13 @@ class MultilayerAnalysis:
         """
         index = 0
         for node_list_temper, to_node_temper in \
-                zip([self.tech_point, self.doc_l_list, self.doc_p_list, self.author_list, self.inst_list],
+                zip([self.tech_point_list, self.doc_l_list, self.doc_p_list, self.author_list, self.inst_list],
                     [self.tech_node, self.doc_l_node, self.doc_p_node, self.author_node, self.inst_node]):
             for node in node_list_temper:
                 self.node_list.append(index)
                 to_node_temper[node] = index
                 index += 1
+        print('      node num %d' % len(self.node_list))
 
     def link_trans_intra(self):
         """
@@ -129,11 +169,14 @@ class MultilayerAnalysis:
         目前无法考虑weight
         :return:
         """
+        count = 0
         for link_list_temper, to_node_temper in \
-                zip([self.doc_l_link, self.doc_p_link, self.author_link, self.inst_link_co, self.inst_link_supply],
-                    [self.doc_l_node, self.doc_p_node, self.author_node, self.inst_node, self.inst_node]):
+                zip([self.tech_link, self.doc_l_link, self.doc_p_link, self.author_link, self.inst_link_co],
+                    [self.tech_node, self.doc_l_node, self.doc_p_node, self.author_node, self.inst_node]):
             for i, link in enumerate(link_list_temper):
                 link_list_temper[i] = [to_node_temper[link[0]], to_node_temper[link[1]]]
+                count += 1
+        print('      link-intra num %d' % count)
 
     def link_trans_inter(self):
         """
@@ -141,19 +184,15 @@ class MultilayerAnalysis:
         目前无法考虑weight
         :return:
         """
+        count = 0
         for link_list_temper, to_source_temper, to_target_temper in \
                 zip([self.tech_doc_l, self.tech_doc_p, self.doc_l_author, self.doc_p_author, self.author_inst],
                     [self.tech_node, self.tech_node, self.doc_l_node, self.doc_p_node, self.author_node],
                     [self.doc_l_node, self.doc_p_node, self.author_node, self.author_node, self.inst_node]):
             for i, link in enumerate(link_list_temper):
                 link_list_temper[i] = [to_source_temper[link[0]], to_target_temper[link[1]]]
-
-    # def tech_net(self):
-    #     """
-    #     科技网络
-    #     :return:
-    #     """
-    #     pass
+                count += 1
+        print('      link-inter num %d' % count)
 
     def doc_net_single(self, label):
         """
@@ -174,7 +213,6 @@ class MultilayerAnalysis:
             for doc in doc_list_temper:
                 tech_doc_link.append([tech, doc])
             doc_list += doc_list_temper
-
         # 收集连接
         doc_link_list = []
         for source in doc_list:
@@ -184,6 +222,22 @@ class MultilayerAnalysis:
             for target in target_list:
                 if target in doc_list:
                     doc_link_list.append([source, target])
+
+        if self.rank:
+            doc_degree = get_node_degree(doc_list, doc_link_list)
+            doc_list = [_[0] for _ in doc_degree[:50]]
+            # 进行一轮清理
+            doc_link_list_ = doc_link_list.copy()
+            doc_link_list = []
+            for doc_link in doc_link_list_:
+                if doc_link[0] in doc_list and doc_link[1] in doc_list:
+                    doc_link_list.append(doc_link)
+            tech_doc_link_ = tech_doc_link.copy()
+            tech_doc_link = []
+            for tech_doc in tech_doc_link_:
+                if tech_doc[1] in doc_list:
+                    tech_doc_link.append(tech_doc)
+
         return doc_list, doc_link_list, tech_doc_link
 
     def author_net_single(self, label):
@@ -259,26 +313,10 @@ class MultilayerAnalysis:
 
         return inst_list, inst_link_list
 
-    def inst_supply_get(self):
-        """
-        :return:
-        """
-        with open('../data/link/inst_supply_dict.json') as file:
-            inst_supply = json.load(file)
-        inst_link = []
-        for source in self.inst_list:
-            try:
-                target_list = inst_supply[str(source)]
-            except KeyError:
-                continue
-            for target in target_list:
-                if target in self.inst_list:
-                    inst_link.append([source, target])
-        return inst_link
-
     def author_inst_get(self):
         """
         :return:
+        真的是很奇怪的部分。
         """
         with open('../data/link/inst_author_dict.json') as file:
             inst_author = json.load(file)
@@ -300,6 +338,7 @@ class MultilayerAnalysis:
         """
         self.doc_l_list, self.doc_l_link, self.tech_doc_l = self.doc_net_single('literature')
         self.doc_p_list, self.doc_p_link, self.tech_doc_p = self.doc_net_single('patent')
+        print('      node num %d' % (len(self.doc_p_list) + len(self.doc_l_list)))
         # 这里需要对两个科技网络进行融合
 
     def author_net(self):
@@ -311,6 +350,7 @@ class MultilayerAnalysis:
         author_l_list, author_l_link_list, self.doc_l_author = self.author_net_single('literature')
         author_p_list, author_p_link_list, self.doc_p_author = [], [], []
         self.author_list = sorted(list(set(author_l_list + author_p_list)))
+        print('      node num %d' % len(self.author_list))
         self.author_link = author_l_link_list + author_p_link_list
 
     def inst_net(self):
@@ -321,8 +361,8 @@ class MultilayerAnalysis:
         inst_l_list, inst_l_link_list = self.inst_co_net_single('literature')
         inst_p_list, inst_p_link_list = self.inst_co_net_single('patent')
         self.inst_list = sorted(list(set(inst_l_list + inst_p_list)))
+        print('      node num %d' % len(self.inst_list))
         self.inst_link_co = inst_l_link_list + inst_p_link_list
-        self.inst_link_supply = self.inst_supply_get()
         self.author_inst = self.author_inst_get()
 
     def network_draw(self):
@@ -338,10 +378,34 @@ class MultilayerAnalysis:
         print('    processing--- draw---')
         self.draw()
 
+    def get_span(self):
+        """
+        坐标跨度计算，计算节点坐标在 x,y 两个维度上的跨度
+        :return:
+        """
+        x_max = max([self.node_layout[i]['pos'][0] for i in self.node_layout])
+        y_max = max([self.node_layout[i]['pos'][1] for i in self.node_layout])
+        x_min = min([self.node_layout[i]['pos'][0] for i in self.node_layout])
+        y_min = min([self.node_layout[i]['pos'][1] for i in self.node_layout])
+        self.x_span = [x_max, x_min]
+        self.y_span = [y_max, y_min]
+
+    def get_h(self):
+        x_span = self.x_span[0] - self.x_span[1]
+        y_span = self.y_span[0] - self.y_span[1]
+        return (x_span * y_span) ** 0.5
+
+    def get_center(self):
+        """
+        对layout进行调整
+        :return:
+        """
+        return (self.x_span[0] - self.x_span[1]) / 2, (self.y_span[0] - self.y_span[1]) / 2
+
     def get_layout(self):
         """
         这个地方有两种方案
-            1.四层网络合起来做一个layout
+            1.四层网络合起来做一个layout 这个方案
             2.每层单独做layout
             目前采用方案1
         :return:
@@ -349,28 +413,19 @@ class MultilayerAnalysis:
         g_layout = nx.Graph()
         g_layout.add_nodes_from(self.node_list)
         g_layout.add_edges_from(
-            self.doc_l_link + self.doc_p_link + self.author_link + self.inst_link_co + self.inst_link_supply +
+            self.tech_link + self.doc_l_link + self.doc_p_link + self.author_link + self.inst_link_co +
             self.tech_doc_l + self.tech_doc_p + self.doc_l_author + self.doc_p_author + self.author_inst)
-        pos = nx.spectral_layout(g_layout)
+        pos = nx.spring_layout(g_layout, iterations=20)
 
         for node in list(g_layout.nodes):
             self.node_layout[node] = {'pos': list(pos[node])}
+        self.get_span()
 
     def get_draw_data(self):
         """
         节点连接转换成三维
         :return:
         """
-
-        # 坐标跨度计算，计算节点坐标在 x,y 两个维度上的跨度
-        def get_h(xyz_dict):
-            x_max = max([xyz_dict[i]['pos'][0] for i in xyz_dict])
-            y_max = max([xyz_dict[i]['pos'][1] for i in xyz_dict])
-            x_min = min([xyz_dict[i]['pos'][0] for i in xyz_dict])
-            y_min = min([xyz_dict[i]['pos'][1] for i in xyz_dict])
-            x_span = x_max - x_min
-            y_span = y_max - y_min
-            return (x_span * y_span) ** 0.5
 
         # 二维变三维
         def get_xyz_3d(node_list, h):
@@ -380,12 +435,13 @@ class MultilayerAnalysis:
                 node_xyz_dict[node] = xyz
             return node_xyz_dict
 
-        high = get_h(self.node_layout)
+        # 可以通过给h增加系数调节整体层间的大小
+        high = self.get_h() * 0.2
         node_tech_xyz = get_xyz_3d(list(self.tech_node.values()), h=0)
-        node_doc_l_xyz = get_xyz_3d(list(self.doc_l_node.values()), h=high)
-        node_doc_p_xyz = get_xyz_3d(list(self.doc_p_node.values()), h=high)
-        node_author_xyz = get_xyz_3d(list(self.author_node.values()), h=high * 2)
-        node_inst_xyz = get_xyz_3d(list(self.inst_node.values()), h=high * 3)
+        node_doc_l_xyz = get_xyz_3d(list(self.doc_l_node.values()), h=high * -1)
+        node_doc_p_xyz = get_xyz_3d(list(self.doc_p_node.values()), h=high * -1)
+        node_author_xyz = get_xyz_3d(list(self.author_node.values()), h=high * -2)
+        node_inst_xyz = get_xyz_3d(list(self.inst_node.values()), h=high * -3)
 
         # 节点
         def get_node_xyz(nodes_xyz):
@@ -413,8 +469,8 @@ class MultilayerAnalysis:
             return xe_, ye_, ze_
 
         for link, node_xyz in \
-                zip([self.doc_l_link, self.doc_p_link, self.author_link, self.inst_link_co, self.inst_link_supply],
-                    [node_doc_l_xyz, node_doc_p_xyz, node_author_xyz, node_inst_xyz, node_inst_xyz]):
+                zip([self.tech_link, self.doc_l_link, self.doc_p_link, self.author_link, self.inst_link_co],
+                    [node_tech_xyz, node_doc_l_xyz, node_doc_p_xyz, node_author_xyz, node_inst_xyz]):
             xe_temper, ye_temper, ze_temper = get_link_xyz_intra(link, node_xyz)
             self.xe += xe_temper
             self.ye += ye_temper
@@ -443,12 +499,17 @@ class MultilayerAnalysis:
         画图
         :return:
         """
+        alpha = 0.75
         trace_node = go.Scatter3d(x=self.xn, y=self.yn, z=self.zn,
                                   mode='markers',
                                   name='actors',
                                   marker=dict(symbol='circle',
                                               size=node_size,  # size of nodes
-                                              # color=color_list_1 + color_list_2 + color_list_3,  # color of nodes
+                                              color=['rgba(255,48,48,1)'] * len(self.tech_point_list) +
+                                                    ['rgba(132,112,255,1)'] * len(self.doc_l_list) +
+                                                    ['rgba(132,112,255,1)'] * len(self.doc_p_list) +
+                                                    ['rgba(238,221,130,1)'] * len(self.author_list) +
+                                                    ['rgba(0,197,205,1)'] * len(self.inst_list),  # color of nodes
                                               colorscale='Viridis'
                                               ),
                                   # text=labels,
@@ -458,14 +519,18 @@ class MultilayerAnalysis:
         trace_line = go.Scatter3d(x=self.xe, y=self.ye, z=self.ze,
                                   mode='lines',
                                   line=dict(width=line_width,
-                                            # color=['rgba(202,255,135,0.8)', 'rgba(202,255,135,0.8)', 0] *
-                                            #       int(len(Xe_1) / 3) +
-                                            #       ['rgba(25,206,250,0.8)', 'rgba(25,206,250,0.8)', 0] *
-                                            #       int(len(Xe_2) / 3) +
-                                            #       ['rgba(245,133,15,0.8)', 'rgba(245,133,15,0.8)', 0] *
-                                            #       int(len(Xe_3) / 3) +
-                                            #       ['rgba(100,100,100,0.7)', 'rgba(100,100,100,0.7)', 0] *
-                                            #       int(len(Xe_12 + Xe_23) / 3)
+                                            color=['rgba(255,48,48,1)'] * (len(self.tech_link) * 3) +
+                                                  ['rgba(132,112,255,1)'] * (len(self.doc_l_link) * 3) +
+                                                  ['rgba(132,112,255,1)'] * (len(self.doc_p_link) * 3) +
+                                                  ['rgba(238,221,130,1)'] * (len(self.author_link) * 3) +
+                                                  ['rgba(0,197,205,1)'] * (len(self.inst_link_co) * 3) +
+                                                  ['rgba(169,169,169,{})'.format(alpha)] * (len(self.tech_doc_l) * 3) +
+                                                  ['rgba(169,169,169,{})'.format(alpha)] * (len(self.tech_doc_p) * 3) +
+                                                  ['rgba(169,169,169,{})'.format(alpha)] * (
+                                                          len(self.doc_l_author) * 3) +
+                                                  ['rgba(169,169,169,{})'.format(alpha)] * (
+                                                          len(self.doc_p_author) * 3) +
+                                                  ['rgba(169,169,169,{})'.format(alpha)] * (len(self.author_inst) * 3),
                                             ),  # 线的颜色与尺寸
                                   hoverinfo='none'
                                   )
@@ -506,9 +571,11 @@ class MultilayerAnalysis:
 
 
 if __name__ == '__main__':
-    tech_point = 'numerical control system'
+    tech_point = 'health care'
+    # tech_point = 'acceleration deceleration'
     output_path = '../data/output/multilayer_analysis.html'
-    node_size, line_width = 1, 0.5
-    multi_analysis = MultilayerAnalysis(tech_point, output_path, node_size, line_width, related=False)
+    node_size, line_width = 3, 1
+    multi_analysis = MultilayerAnalysis(tech_point, output_path, node_size, line_width,
+                                        related=False, rank=True)
     multi_analysis.network_get()
     multi_analysis.network_draw()
